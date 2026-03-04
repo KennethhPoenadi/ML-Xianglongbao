@@ -1,14 +1,3 @@
-"""layer.py — Base Layer abstraction + Dense layer implementation.
-
-All layers must implement forward() and backward().
-Dense supports:
-  - Arbitrary activation (linear, relu, sigmoid, tanh, softmax)
-  - L1 / L2 weight regularization
-  - He / Xavier weight initialisation
-  - Internal SGD and Adam optimizer state
-  - Weight serialisation (get_weights / set_weights) for save/load
-"""
-
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
@@ -99,6 +88,18 @@ class Dense(Layer):
         L1 regularisation coefficient (Lasso).
     l2 : float
         L2 regularisation coefficient (Ridge).
+    init : str
+        Weight initialisation method:
+        'zeros'   — all weights set to 0.
+        'uniform' — uniform random in [low, high].
+        'normal'  — Gaussian with given mean and std.
+        'xavier'  — Xavier/Glorot (recommended for sigmoid/tanh).
+        'he'      — He initialisation (recommended for ReLU).
+        Defaults to 'auto' which picks He for relu, Xavier otherwise.
+    init_params : dict, optional
+        Extra params depending on init method:
+        uniform → {'low': float, 'high': float, 'seed': int}
+        normal  → {'mean': float, 'std': float, 'seed': int}
     """
 
     def __init__(
@@ -107,6 +108,8 @@ class Dense(Layer):
         activation: str = "linear",
         l1: float = 0.0,
         l2: float = 0.0,
+        init: str = "auto",
+        init_params: Optional[Dict[str, Any]] = None,
     ) -> None:
         if units < 1:
             raise ValueError(f"units must be >= 1, got {units}")
@@ -116,6 +119,8 @@ class Dense(Layer):
         self.activation = get_activation(activation)
         self.l1: float = l1
         self.l2: float = l2
+        self.init: str = init.lower()
+        self.init_params: Dict[str, Any] = init_params or {}
 
         # Weights — initialised in build()
         self.W: Optional[np.ndarray] = None   # shape (in_features, units)
@@ -141,16 +146,45 @@ class Dense(Layer):
     # ------------------------------------------------------------------
 
     def build(self, input_size: int) -> None:
-        """Initialise weights given the number of input features.
+        """Initialise weights given the number of input features."""
+        method = self.init
+        p      = self.init_params
 
-        Uses He initialisation for ReLU and Xavier (Glorot) for all others.
-        """
-        if self.activation_name == "relu":
-            std = np.sqrt(2.0 / input_size)
-        else:
+        # Seed handling (per-layer, optional)
+        seed = p.get("seed", None)
+        rng  = np.random.default_rng(seed)
+
+        if method == "zeros":
+            W = np.zeros((input_size, self.units))
+
+        elif method == "uniform":
+            low  = float(p.get("low",  -0.1))
+            high = float(p.get("high",  0.1))
+            W    = rng.uniform(low, high, size=(input_size, self.units))
+
+        elif method == "normal":
+            mean = float(p.get("mean", 0.0))
+            std  = float(p.get("std",  0.01))
+            W    = rng.normal(mean, std, size=(input_size, self.units))
+
+        elif method == "xavier":
+            # Xavier / Glorot: std = sqrt(1 / fan_in)
             std = np.sqrt(1.0 / input_size)
+            W   = rng.normal(0.0, std, size=(input_size, self.units))
 
-        self.W = np.random.randn(input_size, self.units) * std
+        elif method == "he":
+            # He: std = sqrt(2 / fan_in)
+            std = np.sqrt(2.0 / input_size)
+            W   = rng.normal(0.0, std, size=(input_size, self.units))
+
+        else:  # "auto" — pick based on activation
+            if self.activation_name == "relu":
+                std = np.sqrt(2.0 / input_size)
+            else:
+                std = np.sqrt(1.0 / input_size)
+            W = np.random.randn(input_size, self.units) * std
+
+        self.W = W
         self.b = np.zeros((1, self.units))
 
         # Initialise Adam moments to zero
@@ -266,11 +300,13 @@ class Dense(Layer):
 
     def get_config(self) -> Dict[str, Any]:
         return {
-            "type":       "Dense",
-            "units":      self.units,
-            "activation": self.activation_name,
-            "l1":         self.l1,
-            "l2":         self.l2,
+            "type":        "Dense",
+            "units":       self.units,
+            "activation":  self.activation_name,
+            "l1":          self.l1,
+            "l2":          self.l2,
+            "init":        self.init,
+            "init_params": self.init_params,
         }
 
     def __repr__(self) -> str:
