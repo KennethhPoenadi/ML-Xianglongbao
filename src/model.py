@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import tqdm
 
-from layer import Dense, Layer
+from layer import Dense, Layer, RMSNorm
 from loss import Loss, get_loss
 
 
@@ -94,10 +94,14 @@ class Model:
 
         # Special case: Softmax + Categorical Cross-Entropy shortcut
         # The combined derivative simplifies to (y_pred - y_true)
+        # Find last Dense layer (skip trailing normalisation layers)
+        last_dense = next(
+            (l for l in reversed(self.layers) if isinstance(l, Dense)), None
+        )
         if (
-            len(self.layers) > 0
-            and isinstance(self.layers[-1], Dense)
-            and self.layers[-1].activation_name == "softmax"
+            last_dense is not None
+            and last_dense is self.layers[-1]
+            and last_dense.activation_name == "softmax"
             and self.loss_name == "categorical_crossentropy"
         ):
             # Use the simplified gradient: dL/dz = y_pred - y_true
@@ -115,7 +119,7 @@ class Model:
     def update_weights(self) -> None:
         """Update weights in all layers using gradient descent."""
         for layer in self.layers:
-            if isinstance(layer, Dense):
+            if isinstance(layer, (Dense, RMSNorm)):
                 layer.update_sgd(self.learning_rate)
 
     def fit(
@@ -314,11 +318,28 @@ class Model:
             layer = self.layers[idx]
             if isinstance(layer, Dense) and layer.W is not None:
                 weights = layer.W.flatten()
+                label = f"Dense_{idx} W"
                 axes[i].hist(weights, bins=50, alpha=0.7, edgecolor="black")
-                axes[i].set_title(f"Layer {idx} Weight Distribution")
+                axes[i].set_title(f"Layer {idx} (Dense) Weight Distribution")
                 axes[i].set_xlabel("Weight Value")
                 axes[i].set_ylabel("Frequency")
                 axes[i].grid(True, alpha=0.3)
+            elif isinstance(layer, RMSNorm) and layer.gamma is not None:
+                axes[i].hist(
+                    layer.gamma, bins=30, alpha=0.7,
+                    edgecolor="black", color="orange"
+                )
+                axes[i].set_title(f"Layer {idx} (RMSNorm) Gamma Distribution")
+                axes[i].set_xlabel("Gamma Value")
+                axes[i].set_ylabel("Frequency")
+                axes[i].grid(True, alpha=0.3)
+            else:
+                axes[i].text(
+                    0.5, 0.5, "No weights\navailable",
+                    ha="center", va="center",
+                    transform=axes[i].transAxes,
+                )
+                axes[i].set_title(f"Layer {idx}")
 
         plt.tight_layout()
         plt.show()
@@ -354,7 +375,18 @@ class Model:
             if isinstance(layer, Dense) and layer._dW is not None:
                 gradients = layer._dW.flatten()
                 axes[i].hist(gradients, bins=50, alpha=0.7, edgecolor="black")
-                axes[i].set_title(f"Layer {idx} Gradient Distribution")
+                axes[i].set_title(f"Layer {idx} (Dense) Gradient Distribution")
+                axes[i].set_xlabel("Gradient Value")
+                axes[i].set_ylabel("Frequency")
+                axes[i].grid(True, alpha=0.3)
+            elif isinstance(layer, RMSNorm) and layer._dgamma is not None:
+                axes[i].hist(
+                    layer._dgamma, bins=30, alpha=0.7,
+                    edgecolor="black", color="orange"
+                )
+                axes[i].set_title(
+                    f"Layer {idx} (RMSNorm) dGamma Distribution"
+                )
                 axes[i].set_xlabel("Gradient Value")
                 axes[i].set_ylabel("Frequency")
                 axes[i].grid(True, alpha=0.3)
@@ -426,6 +458,9 @@ class Model:
                     init_params=layer_config.get("init_params", {}),
                 )
                 self.layers.append(layer)
+            elif layer_config["type"] == "RMSNorm":
+                layer = RMSNorm(eps=layer_config.get("eps", 1e-8))
+                self.layers.append(layer)
 
         # Restore weights
         for layer, weights_dict in zip(self.layers, model_data["weights"]):
@@ -464,6 +499,18 @@ class Model:
 
                 print(
                     f"Dense_{i:<14} {output_shape:<20} {num_params:<15,}"
+                )
+                total_params += num_params
+
+            elif isinstance(layer, RMSNorm):
+                if layer.gamma is not None:
+                    output_shape = f"(None, {layer.gamma.shape[0]})"
+                    num_params = layer.gamma.size
+                else:
+                    output_shape = "(None, ?)"
+                    num_params = 0
+                print(
+                    f"RMSNorm_{i:<13} {output_shape:<20} {num_params:<15,}"
                 )
                 total_params += num_params
 

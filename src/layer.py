@@ -315,3 +315,175 @@ class Dense(Layer):
             f"Dense(units={self.units}, activation='{self.activation_name}', "
             f"l1={self.l1}, l2={self.l2}, {built})"
         )
+
+
+# ---------------------------------------------------------------------------
+# RMSNorm Layer
+# ---------------------------------------------------------------------------
+
+class RMSNorm(Layer):
+    """Root Mean Square Layer Normalisation (RMSNorm).
+
+    Each sample is normalised by its RMS across features, then scaled
+    element-wise by a learnable parameter *gamma* (no additive bias, unlike
+    standard LayerNorm).
+
+    Forward:
+        rms(x)  = sqrt( mean(x^2) + eps )   shape (batch, 1)
+        x_norm  = x / rms(x)                shape (batch, features)
+        y       = gamma * x_norm            shape (batch, features)
+
+    Backward (via chain-rule):
+        dL/d_gamma = sum_batch( grad * x_norm )
+        dL/dX_j    = (1/rms) * [ (gamma*grad)_j
+                                  - x_norm_j * mean_f( gamma*grad * x_norm ) ]
+
+    Parameters
+    ----------
+    eps : float
+        Small constant added under the square root for numerical stability.
+        Default 1e-8.
+    """
+
+    def __init__(self, eps: float = 1e-8) -> None:
+        self.eps: float = eps
+
+        # Learnable scale parameter — initialised in build()
+        self.gamma: Optional[np.ndarray] = None   # shape (features,)
+
+        # Cached values for backprop
+        self._input:  Optional[np.ndarray] = None   # (batch, features)
+        self._rms:    Optional[np.ndarray] = None   # (batch, 1)
+        self._x_norm: Optional[np.ndarray] = None   # (batch, features)
+
+        # Gradient of gamma (set during backward)
+        self._dgamma: Optional[np.ndarray] = None   # (features,)
+
+        # Adam optimizer moments for gamma
+        self._m_gamma: Optional[np.ndarray] = None
+        self._v_gamma: Optional[np.ndarray] = None
+        self._t: int = 0
+
+    # ------------------------------------------------------------------
+    # Build
+    # ------------------------------------------------------------------
+
+    def build(self, features: int) -> None:
+        """Initialise gamma to ones (identity transform at start)."""
+        self.gamma   = np.ones((features,))
+        self._dgamma = np.zeros((features,))
+        self._m_gamma = np.zeros((features,))
+        self._v_gamma = np.zeros((features,))
+        self._t = 0
+
+    # ------------------------------------------------------------------
+    # Forward
+    # ------------------------------------------------------------------
+
+    def forward(self, x: np.ndarray, training: bool = True) -> np.ndarray:
+        """Normalise x by its RMS and scale by gamma.
+
+        Parameters
+        ----------
+        x : np.ndarray
+            Input of shape (batch, features).
+        training : bool
+            Unused; accepted for API compatibility.
+
+        Returns
+        -------
+        np.ndarray
+            Normalised and scaled output, same shape as x.
+        """
+        if self.gamma is None:
+            self.build(x.shape[1])
+
+        self._input = x
+        # rms: (batch, 1)
+        self._rms = np.sqrt(np.mean(x ** 2, axis=1, keepdims=True) + self.eps)
+        self._x_norm = x / self._rms          # (batch, features)
+        return self.gamma * self._x_norm      # broadcast gamma (features,)
+
+    # ------------------------------------------------------------------
+    # Backward
+    # ------------------------------------------------------------------
+
+    def backward(
+        self, grad: np.ndarray, pre_activation: bool = False
+    ) -> np.ndarray:
+        """Compute gradients and propagate to previous layer.
+
+        Parameters
+        ----------
+        grad : np.ndarray
+            dL/dY, shape (batch, features).
+        pre_activation : bool
+            Unused; accepted for API compatibility.
+
+        Returns
+        -------
+        np.ndarray
+            dL/dX, shape (batch, features).
+        """
+        D = self._input.shape[1]
+
+        # dL/d_gamma — accumulated over batch
+        self._dgamma = np.sum(grad * self._x_norm, axis=0)   # (features,)
+
+        # dL/dX derivation:
+        #   u   = gamma * grad               (the "weighted" gradient)
+        #   dot = mean_features(u * x_norm)  (per-sample scalar)
+        #   dX  = (u - x_norm * dot) / rms
+        u   = self.gamma * grad                                  # (batch, D)
+        dot = np.sum(u * self._x_norm, axis=1, keepdims=True) / D  # (batch,1)
+        dx  = (u - self._x_norm * dot) / self._rms              # (batch, D)
+        return dx
+
+    # ------------------------------------------------------------------
+    # Parameter updates
+    # ------------------------------------------------------------------
+
+    def update_sgd(self, lr: float) -> None:
+        """Apply vanilla SGD to gamma."""
+        self.gamma -= lr * self._dgamma
+
+    def update_adam(
+        self,
+        lr: float,
+        beta1: float = 0.9,
+        beta2: float = 0.999,
+        eps: float = 1e-8,
+    ) -> None:
+        """Apply Adam update rule to gamma."""
+        self._t += 1
+        t = self._t
+
+        self._m_gamma = beta1 * self._m_gamma + (1.0 - beta1) * self._dgamma
+        self._v_gamma = beta2 * self._v_gamma + (1.0 - beta2) * (self._dgamma ** 2)
+
+        m_hat = self._m_gamma / (1.0 - beta1 ** t)
+        v_hat = self._v_gamma / (1.0 - beta2 ** t)
+
+        self.gamma -= lr * m_hat / (np.sqrt(v_hat) + eps)
+
+    # ------------------------------------------------------------------
+    # Serialisation helpers
+    # ------------------------------------------------------------------
+
+    def get_weights(self) -> Dict[str, np.ndarray]:
+        if self.gamma is None:
+            return {}
+        return {"gamma": self.gamma}
+
+    def set_weights(self, weights: Dict[str, np.ndarray]) -> None:
+        self.gamma = weights["gamma"]
+        self._m_gamma = np.zeros_like(self.gamma)
+        self._v_gamma = np.zeros_like(self.gamma)
+        self._t = 0
+
+    def get_config(self) -> Dict[str, Any]:
+        return {"type": "RMSNorm", "eps": self.eps}
+
+    def __repr__(self) -> str:
+        built = f"gamma{self.gamma.shape}" if self.gamma is not None else "unbuilt"
+        return f"RMSNorm(eps={self.eps}, {built})"
