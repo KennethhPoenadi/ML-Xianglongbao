@@ -46,3 +46,61 @@ class Softmax:
     def derivative(self, x: np.ndarray) -> np.ndarray:
         s = self(x)
         return s * (1 - s)
+
+
+class LeakyReLU:
+    """
+    Leaky ReLU (Leaky Rectified Linear Unit)
+    
+    Formula:
+        f(x) = x           jika x > 0
+        f(x) = alpha * x   jika x <= 0
+    
+    """
+    
+    def __init__(self, alpha: float = 0.01):
+        """
+        Args:
+            alpha: Slope untuk nilai negatif (default: 0.01)
+        """
+        self.alpha = alpha
+    
+    def __call__(self, x: np.ndarray) -> np.ndarray:
+        return np.where(x > 0, x, self.alpha * x)
+    
+    def derivative(self, x: np.ndarray) -> np.ndarray:
+        """
+        Derivative:
+            f'(x) = 1         jika x > 0
+            f'(x) = alpha     jika x <= 0
+        """
+        return np.where(x > 0, 1, self.alpha)
+
+
+class ELU:
+    """
+    ELU (Exponential Linear Unit)
+    
+    Formula:
+        f(x) = x                    jika x > 0
+        f(x) = alpha * (e^x - 1)    jika x <= 0
+    """
+    
+    def __init__(self, alpha: float = 1.0):
+        """
+        Args:
+            alpha: Parameter untuk mengontrol saturasi negatif (default: 1.0)
+        """
+        self.alpha = alpha
+    
+    def __call__(self, x: np.ndarray) -> np.ndarray:
+        return np.where(x > 0, x, self.alpha * (np.exp(x) - 1))
+    
+    def derivative(self, x: np.ndarray) -> np.ndarray:
+        """
+        Derivative:
+            f'(x) = 1                       jika x > 0
+            f'(x) = alpha * e^x             jika x <= 0
+                  = f(x) + alpha            
+        """
+        return np.where(x > 0, 1, self.alpha * np.exp(x))
