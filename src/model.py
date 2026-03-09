@@ -498,8 +498,15 @@ class Model:
 
         print(f"Model loaded from {filepath}")
 
-    def summary(self) -> None:
-        """Print a summary of the model architecture."""
+    def summary(self, input_shape: Optional[int] = None) -> None:
+        """Print a summary of the model architecture.
+
+        Parameters
+        ----------
+        input_shape : int, optional
+            Number of input features. Required to compute param counts before
+            the first forward pass (i.e. before weights are built).
+        """
         print("=" * 70)
         print("Model Summary")
         print("=" * 70)
@@ -507,14 +514,17 @@ class Model:
         print("-" * 70)
 
         total_params = 0
+        prev_size = input_shape
         for i, layer in enumerate(self.layers):
             if isinstance(layer, Dense):
+                output_shape = f"(None, {layer.units})"
                 if layer.W is not None:
-                    output_shape = f"(None, {layer.units})"
                     num_params = layer.W.size + layer.b.size
+                elif prev_size is not None:
+                    num_params = prev_size * layer.units + layer.units
                 else:
-                    output_shape = f"(None, {layer.units})"
                     num_params = 0
+                prev_size = layer.units
 
                 print(
                     f"Dense_{i:<14} {output_shape:<20} {num_params:<15,}"
