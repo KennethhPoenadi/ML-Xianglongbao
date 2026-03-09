@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 from layer import Dense, Layer, RMSNorm
 from loss import Loss, get_loss
+from optimizer import Optimizer, SGD, get_optimizer
 
 
 class Model:
@@ -20,7 +21,7 @@ class Model:
         self.layers: List[Layer] = []
         self.loss: Optional[Loss] = None
         self.loss_name: str = ""
-        self.learning_rate: float = 0.01
+        self.optimizer: Optimizer = SGD(lr=0.01)
 
         # Training history
         self.history: Dict[str, List[float]] = {
@@ -42,8 +43,10 @@ class Model:
         self,
         loss: str,
         learning_rate: float = 0.01,
+        optimizer: str = "sgd",
+        **optimizer_kwargs,
     ) -> None:
-        """Compile the model with a loss function and learning rate.
+        """Compile the model with a loss function and optimizer.
 
         Parameters
         ----------
@@ -51,11 +54,24 @@ class Model:
             Loss function name: 'mse', 'binary_crossentropy',
             'categorical_crossentropy'.
         learning_rate : float
-            Learning rate for gradient descent. Default is 0.01.
+            Learning rate passed to the optimizer. Default is 0.01.
+        optimizer : str
+            Optimizer name: 'sgd' or 'adam'. Default is 'sgd'.
+        **optimizer_kwargs
+            Extra keyword arguments forwarded to the optimizer constructor.
+            For Adam: beta1, beta2, eps.
+
+        Examples
+        --------
+        >>> model.compile(loss='mse', learning_rate=0.01, optimizer='sgd')
+        >>> model.compile(loss='mse', learning_rate=0.001, optimizer='adam',
+        ...               beta1=0.9, beta2=0.999)
         """
         self.loss_name = loss.lower()
         self.loss = get_loss(self.loss_name)
-        self.learning_rate = learning_rate
+        self.optimizer = get_optimizer(
+            {"name": optimizer, "lr": learning_rate, **optimizer_kwargs}
+        )
 
     def forward(self, X: np.ndarray, training: bool = True) -> np.ndarray:
         """Perform forward propagation through all layers.
@@ -117,10 +133,10 @@ class Model:
                 grad = layer.backward(grad, pre_activation=False)
 
     def update_weights(self) -> None:
-        """Update weights in all layers using gradient descent."""
+        """Update parameters of all trainable layers via the optimizer."""
         for layer in self.layers:
-            if isinstance(layer, (Dense, RMSNorm)):
-                layer.update_sgd(self.learning_rate)
+            if layer.get_params():
+                self.optimizer.step(layer)
 
     def fit(
         self,
@@ -416,7 +432,7 @@ class Model:
             "architecture": [layer.get_config() for layer in self.layers],
             "weights": [layer.get_weights() for layer in self.layers],
             "loss": self.loss_name,
-            "learning_rate": self.learning_rate,
+            "optimizer": self.optimizer.get_config(),
         }
 
         # Convert numpy arrays to lists for JSON serialization
@@ -472,10 +488,13 @@ class Model:
                 layer.set_weights(weights_np)
 
         # Restore compilation settings
-        self.compile(
-            loss=model_data["loss"],
-            learning_rate=model_data["learning_rate"],
-        )
+        self.loss_name = model_data["loss"]
+        self.loss = get_loss(self.loss_name)
+        # Rebuild optimizer; reset moments since weights were just loaded
+        self.optimizer = get_optimizer(model_data.get(
+            "optimizer", {"name": "sgd", "lr": model_data.get("learning_rate", 0.01)}
+        ))
+        self.optimizer.reset()
 
         print(f"Model loaded from {filepath}")
 
@@ -529,7 +548,9 @@ if __name__ == "__main__":
     model.add(Dense(units=64, activation="relu", init="he"))
     model.add(Dense(units=10, activation="softmax", init="xavier"))
     model.compile(loss="categorical_crossentropy", learning_rate=0.01)
-
+        # or with Adam:
+        # model.compile(loss="categorical_crossentropy", learning_rate=0.001,
+        #               optimizer="adam")
     dummy_input = np.zeros((1, 784))
     _ = model.forward(dummy_input)
 
