@@ -14,103 +14,51 @@ from optimizer import Optimizer, SGD, get_optimizer
 
 
 class Model:
-    """Feedforward Neural Network (FFNN) model."""
-
+    """feedforward Neural Network (FFNN) model."""
     def __init__(self) -> None:
-        """Initialize an empty model."""
         self.layers: List[Layer] = []
         self.loss: Optional[Loss] = None
         self.loss_name: str = ""
         self.optimizer: Optimizer = SGD(lr=0.01)
+        self.autograd: bool = False
 
-        # Training history
         self.history: Dict[str, List[float]] = {
             "train_loss": [],
             "val_loss": [],
         }
 
     def add(self, layer: Layer) -> None:
-        """Add a layer to the model.
-
-        Parameters
-        ----------
-        layer : Layer
-            The layer to add (e.g., Dense layer).
-        """
         self.layers.append(layer)
 
-    def compile(
-        self,
-        loss: str,
-        learning_rate: float = 0.01,
-        optimizer: str = "sgd",
-        **optimizer_kwargs,
-    ) -> None:
-        """Compile the model with a loss function and optimizer.
-
-        Parameters
-        ----------
-        loss : str
-            Loss function name: 'mse', 'binary_crossentropy',
-            'categorical_crossentropy'.
-        learning_rate : float
-            Learning rate passed to the optimizer. Default is 0.01.
-        optimizer : str
-            Optimizer name: 'sgd' or 'adam'. Default is 'sgd'.
-        **optimizer_kwargs
-            Extra keyword arguments forwarded to the optimizer constructor.
-            For Adam: beta1, beta2, eps.
-
-        Examples
-        --------
-        >>> model.compile(loss='mse', learning_rate=0.01, optimizer='sgd')
-        >>> model.compile(loss='mse', learning_rate=0.001, optimizer='adam',
-        ...               beta1=0.9, beta2=0.999)
-        """
+    def compile(self,loss: str,learning_rate: float = 0.01,optimizer: str = "sgd",autograd: bool = False, **optimizer_kwargs,) -> None:
         self.loss_name = loss.lower()
         self.loss = get_loss(self.loss_name)
+        self.autograd = autograd
+        if autograd:
+            for layer in self.layers:
+                layer.autograd = True
         self.optimizer = get_optimizer(
             {"name": optimizer, "lr": learning_rate, **optimizer_kwargs}
         )
 
-    def forward(self, X: np.ndarray, training: bool = True) -> np.ndarray:
-        """Perform forward propagation through all layers.
-
-        Parameters
-        ----------
-        X : np.ndarray
-            Input data of shape (batch_size, input_features).
-        training : bool
-            Whether the model is in training mode. Default is True.
-
-        Returns
-        -------
-        np.ndarray
-            Model output of shape (batch_size, output_features).
-        """
+    def forward(self, X, training: bool = True):
+        if self.autograd:
+            from autograd import Tensor
+            out = X if isinstance(X, Tensor) else Tensor(X)
+            for layer in self.layers:
+                out = layer.forward(out, training=training)
+            return out
         out = X
         for layer in self.layers:
             out = layer.forward(out, training=training)
         return out
 
+    def _zero_grad(self) -> None:
+        for layer in self.layers:
+            layer.zero_grad()
+
     def backward(self, y_pred: np.ndarray, y_true: np.ndarray) -> None:
-        """Perform backward propagation through all layers.
-
-        Computes gradients for all weights using the chain rule.
-
-        Parameters
-        ----------
-        y_pred : np.ndarray
-            Predicted output from forward pass, shape (batch_size, num_classes).
-        y_true : np.ndarray
-            True labels, shape (batch_size, num_classes).
-        """
-        # Gradient of loss w.r.t. output
         grad = self.loss.backward(y_pred, y_true)
-
-        # Special case: Softmax + Categorical Cross-Entropy shortcut
-        # The combined derivative simplifies to (y_pred - y_true)
-        # Find last Dense layer (skip trailing normalisation layers)
         last_dense = next(
             (l for l in reversed(self.layers) if isinstance(l, Dense)), None
         )
@@ -120,73 +68,32 @@ class Model:
             and last_dense.activation_name == "softmax"
             and self.loss_name == "categorical_crossentropy"
         ):
-            # Use the simplified gradient: dL/dz = y_pred - y_true
             grad = (y_pred - y_true) / y_pred.shape[0]
-            # Backprop through last layer with pre_activation=True
             grad = self.layers[-1].backward(grad, pre_activation=True)
-            # Backprop through remaining layers normally
             for layer in reversed(self.layers[:-1]):
                 grad = layer.backward(grad, pre_activation=False)
         else:
-            # Standard backprop through all layers
             for layer in reversed(self.layers):
                 grad = layer.backward(grad, pre_activation=False)
 
     def update_weights(self) -> None:
-        """Update parameters of all trainable layers via the optimizer."""
         for layer in self.layers:
             if layer.get_params():
                 self.optimizer.step(layer)
 
-    def fit(
-        self,
-        X_train: np.ndarray,
-        y_train: np.ndarray,
-        epochs: int = 10,
-        batch_size: int = 32,
-        validation_data: Optional[Tuple[np.ndarray, np.ndarray]] = None,
-        verbose: int = 1,
-        shuffle: bool = True,
-    ) -> Dict[str, List[float]]:
-        """Train the model on the given dataset.
-
-        Parameters
-        ----------
-        X_train : np.ndarray
-            Training input data, shape (num_samples, num_features).
-        y_train : np.ndarray
-            Training labels, shape (num_samples, num_classes) or (num_samples,).
-        epochs : int
-            Number of training epochs. Default is 10.
-        batch_size : int
-            Number of samples per gradient update. Default is 32.
-        validation_data : tuple of (X_val, y_val), optional
-            Validation data to evaluate loss at the end of each epoch.
-        verbose : int
-            Verbosity mode:
-            0 = silent
-            1 = progress bar with train/val loss
-        shuffle : bool
-            Whether to shuffle training data before each epoch. Default True.
-
-        Returns
-        -------
-        dict
-            History containing 'train_loss' and 'val_loss' per epoch.
-        """
+    def fit(self,X_train: np.ndarray,y_train: np.ndarray,epochs: int = 10,batch_size: int = 32,validation_data: Optional[Tuple[np.ndarray, np.ndarray]] = None,verbose: int = 1,shuffle: bool = True,) -> Dict[str, List[float]]:
         if self.loss is None:
             raise RuntimeError(
-                "Model must be compiled before training. Call model.compile()."
+                "model must be compiled before training. call model.compile()."
             )
 
-        # Reset history
         self.history = {"train_loss": [], "val_loss": []}
 
         n_samples = X_train.shape[0]
         n_batches = int(np.ceil(n_samples / batch_size))
 
         for epoch in range(epochs):
-            # Shuffle data
+            #shuffle data
             if shuffle:
                 indices = np.random.permutation(n_samples)
                 X_shuffled = X_train[indices]
@@ -195,15 +102,11 @@ class Model:
                 X_shuffled = X_train
                 y_shuffled = y_train
 
-            # Training loop
+            #training loop
             epoch_losses = []
 
             if verbose == 1:
-                pbar = tqdm(
-                    range(n_batches),
-                    desc=f"Epoch {epoch + 1}/{epochs}",
-                    ncols=100,
-                )
+                pbar = tqdm(range(n_batches),desc=f"Epoch {epoch + 1}/{epochs}",ncols=100,)
             else:
                 pbar = range(n_batches)
 
@@ -214,28 +117,43 @@ class Model:
                 X_batch = X_shuffled[start:end]
                 y_batch = y_shuffled[start:end]
 
-                # Forward pass
-                y_pred = self.forward(X_batch, training=True)
+                if self.autograd:
+                    from autograd import Tensor
+                    # 1.zero gradients
+                    self._zero_grad()
+                    # 2.forward
+                    y_pred = self.forward(X_batch, training=True)
+                    # 3.compute loss via Tensor ops (graph)
+                    y_true_t = Tensor(
+                        y_batch if y_batch.ndim == 2
+                        else y_batch.reshape(-1, 1)
+                    )
+                    loss_tensor = self.loss.forward_autograd(
+                        y_pred, y_true_t
+                    )
+                    batch_loss = float(loss_tensor.data)
+                    # 4.backward
+                    loss_tensor.backward()
+                    # 5.update weights
+                    self.update_weights()
+                else:
+                    #forward pass
+                    y_pred = self.forward(X_batch, training=True)
+                    #compute loss
+                    batch_loss = self.loss.forward(y_pred, y_batch)
+                    #backward pass
+                    self.backward(y_pred, y_batch)
+                    #update weights
+                    self.update_weights()
 
-                # Compute loss
-                batch_loss = self.loss.forward(y_pred, y_batch)
                 epoch_losses.append(batch_loss)
 
-                # Backward pass
-                self.backward(y_pred, y_batch)
-
-                # Update weights
-                self.update_weights()
-
-                # Update progress bar
                 if verbose == 1 and isinstance(pbar, tqdm):
                     pbar.set_postfix({"loss": f"{batch_loss:.4f}"})
 
-            # Compute epoch metrics
             train_loss = float(np.mean(epoch_losses))
             self.history["train_loss"].append(train_loss)
 
-            # Validation loss
             if validation_data is not None:
                 X_val, y_val = validation_data
                 y_val_pred = self.predict(X_val)
@@ -255,52 +173,26 @@ class Model:
         return self.history
 
     def predict(self, X: np.ndarray) -> np.ndarray:
-        """Generate predictions for input samples.
+        out = self.forward(X, training=False)
+        if self.autograd:
+            return out.data  # tensor → numpy
+        return out
 
-        Parameters
-        ----------
-        X : np.ndarray
-            Input data, shape (num_samples, num_features).
-
-        Returns
-        -------
-        np.ndarray
-            Predictions, shape (num_samples, num_classes).
-        """
-        return self.forward(X, training=False)
-
-    def evaluate(
-        self, X: np.ndarray, y: np.ndarray
-    ) -> Tuple[float, Optional[float]]:
-        """Evaluate the model on test data.
-
-        Parameters
-        ----------
-        X : np.ndarray
-            Test input data.
-        y : np.ndarray
-            Test labels.
-
-        Returns
-        -------
-        tuple of (loss, accuracy)
-            Test loss and accuracy (if applicable).
-        """
+    def evaluate(self, X: np.ndarray, y: np.ndarray) -> Tuple[float, Optional[float]]:
         if self.loss is None:
             raise RuntimeError("Model must be compiled before evaluation.")
 
         y_pred = self.predict(X)
         loss = self.loss.forward(y_pred, y)
 
-        # Compute accuracy for classification tasks
         accuracy = None
         if self.loss_name in ["binary_crossentropy", "categorical_crossentropy"]:
             if y.ndim == 2 and y.shape[1] > 1:
-                # Multi-class classification
+                #multi-class classification
                 y_pred_class = np.argmax(y_pred, axis=1)
                 y_true_class = np.argmax(y, axis=1)
             else:
-                # Binary classification
+                #binary classification
                 y_pred_class = (y_pred > 0.5).astype(int).flatten()
                 y_true_class = y.flatten()
 
@@ -308,16 +200,7 @@ class Model:
 
         return loss, accuracy
 
-    def plot_weight_distributions(
-        self, layer_indices: Optional[List[int]] = None
-    ) -> None:
-        """Plot weight distributions for specified layers.
-
-        Parameters
-        ----------
-        layer_indices : list of int, optional
-            Indices of layers to plot (0-indexed). If None, plots all layers.
-        """
+    def plot_weight_distributions(self, layer_indices: Optional[List[int]] = None) -> None:
         if layer_indices is None:
             layer_indices = list(range(len(self.layers)))
 
@@ -332,17 +215,17 @@ class Model:
                 continue
 
             layer = self.layers[idx]
-            if isinstance(layer, Dense) and layer.W is not None:
-                weights = layer.W.flatten()
-                label = f"Dense_{idx} W"
+            params = layer.get_params()
+            if isinstance(layer, Dense) and "W" in params:
+                weights = params["W"].flatten()
                 axes[i].hist(weights, bins=50, alpha=0.7, edgecolor="black")
                 axes[i].set_title(f"Layer {idx} (Dense) Weight Distribution")
                 axes[i].set_xlabel("Weight Value")
                 axes[i].set_ylabel("Frequency")
                 axes[i].grid(True, alpha=0.3)
-            elif isinstance(layer, RMSNorm) and layer.gamma is not None:
+            elif isinstance(layer, RMSNorm) and "gamma" in params:
                 axes[i].hist(
-                    layer.gamma, bins=30, alpha=0.7,
+                    params["gamma"], bins=30, alpha=0.7,
                     edgecolor="black", color="orange"
                 )
                 axes[i].set_title(f"Layer {idx} (RMSNorm) Gamma Distribution")
@@ -351,7 +234,7 @@ class Model:
                 axes[i].grid(True, alpha=0.3)
             else:
                 axes[i].text(
-                    0.5, 0.5, "No weights\navailable",
+                    0.5, 0.5, "No weights available",
                     ha="center", va="center",
                     transform=axes[i].transAxes,
                 )
@@ -360,20 +243,7 @@ class Model:
         plt.tight_layout()
         plt.show()
 
-    def plot_gradient_distributions(
-        self, layer_indices: Optional[List[int]] = None
-    ) -> None:
-        """Plot gradient distributions for specified layers.
-
-        Parameters
-        ----------
-        layer_indices : list of int, optional
-            Indices of layers to plot (0-indexed). If None, plots all layers.
-
-        Notes
-        -----
-        Gradients must be computed via backward pass before calling this method.
-        """
+    def plot_gradient_distributions(self, layer_indices: Optional[List[int]] = None) -> None:
         if layer_indices is None:
             layer_indices = list(range(len(self.layers)))
 
@@ -388,16 +258,17 @@ class Model:
                 continue
 
             layer = self.layers[idx]
-            if isinstance(layer, Dense) and layer._dW is not None:
-                gradients = layer._dW.flatten()
+            grads = layer.get_grads()
+            if isinstance(layer, Dense) and "W" in grads:
+                gradients = grads["W"].flatten()
                 axes[i].hist(gradients, bins=50, alpha=0.7, edgecolor="black")
                 axes[i].set_title(f"Layer {idx} (Dense) Gradient Distribution")
                 axes[i].set_xlabel("Gradient Value")
                 axes[i].set_ylabel("Frequency")
                 axes[i].grid(True, alpha=0.3)
-            elif isinstance(layer, RMSNorm) and layer._dgamma is not None:
+            elif isinstance(layer, RMSNorm) and "gamma" in grads:
                 axes[i].hist(
-                    layer._dgamma, bins=30, alpha=0.7,
+                    grads["gamma"], bins=30, alpha=0.7,
                     edgecolor="black", color="orange"
                 )
                 axes[i].set_title(
@@ -435,7 +306,6 @@ class Model:
             "optimizer": self.optimizer.get_config(),
         }
 
-        # Convert numpy arrays to lists for JSON serialization
         for layer_weights in model_data["weights"]:
             for key in layer_weights:
                 layer_weights[key] = layer_weights[key].tolist()
@@ -449,20 +319,9 @@ class Model:
         print(f"Model saved to {filepath}")
 
     def load(self, filepath: str) -> None:
-        """Load model architecture and weights from a file.
-
-        Parameters
-        ----------
-        filepath : str
-            Path to the saved model file.
-        """
         with open(filepath, "r") as f:
             model_data = json.load(f)
-
-        # Clear existing layers
         self.layers = []
-
-        # Reconstruct layers
         for layer_config in model_data["architecture"]:
             if layer_config["type"] == "Dense":
                 layer = Dense(
@@ -478,19 +337,15 @@ class Model:
                 layer = RMSNorm(eps=layer_config.get("eps", 1e-8))
                 self.layers.append(layer)
 
-        # Restore weights
         for layer, weights_dict in zip(self.layers, model_data["weights"]):
             if weights_dict:
-                # Convert lists back to numpy arrays
                 weights_np = {
                     k: np.array(v) for k, v in weights_dict.items()
                 }
                 layer.set_weights(weights_np)
 
-        # Restore compilation settings
         self.loss_name = model_data["loss"]
         self.loss = get_loss(self.loss_name)
-        # Rebuild optimizer; reset moments since weights were just loaded
         self.optimizer = get_optimizer(model_data.get(
             "optimizer", {"name": "sgd", "lr": model_data.get("learning_rate", 0.01)}
         ))
@@ -499,14 +354,6 @@ class Model:
         print(f"Model loaded from {filepath}")
 
     def summary(self, input_shape: Optional[int] = None) -> None:
-        """Print a summary of the model architecture.
-
-        Parameters
-        ----------
-        input_shape : int, optional
-            Number of input features. Required to compute param counts before
-            the first forward pass (i.e. before weights are built).
-        """
         print("=" * 70)
         print("Model Summary")
         print("=" * 70)
@@ -518,8 +365,9 @@ class Model:
         for i, layer in enumerate(self.layers):
             if isinstance(layer, Dense):
                 output_shape = f"(None, {layer.units})"
-                if layer.W is not None:
-                    num_params = layer.W.size + layer.b.size
+                params = layer.get_params()
+                if params:
+                    num_params = params["W"].size + params["b"].size
                 elif prev_size is not None:
                     num_params = prev_size * layer.units + layer.units
                 else:
@@ -532,9 +380,10 @@ class Model:
                 total_params += num_params
 
             elif isinstance(layer, RMSNorm):
-                if layer.gamma is not None:
-                    output_shape = f"(None, {layer.gamma.shape[0]})"
-                    num_params = layer.gamma.size
+                params = layer.get_params()
+                if params:
+                    output_shape = f"(None, {params['gamma'].shape[0]})"
+                    num_params = params['gamma'].size
                 else:
                     output_shape = "(None, ?)"
                     num_params = 0
@@ -550,19 +399,3 @@ class Model:
     def __repr__(self) -> str:
         """Return string representation of the model."""
         return f"Model(layers={len(self.layers)}, loss={self.loss_name})"
-
-# USAGE EXAMPLE
-if __name__ == "__main__":
-    # Create a simple model
-    model = Model()
-    model.add(Dense(units=64, activation="relu", init="he"))
-    model.add(Dense(units=10, activation="softmax", init="xavier"))
-    model.compile(loss="categorical_crossentropy", learning_rate=0.01)
-        # or with Adam:
-        # model.compile(loss="categorical_crossentropy", learning_rate=0.001,
-        #               optimizer="adam")
-    dummy_input = np.zeros((1, 784))
-    _ = model.forward(dummy_input)
-
-    # Print model summary
-    model.summary()

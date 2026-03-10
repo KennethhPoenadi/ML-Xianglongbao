@@ -27,11 +27,17 @@ def get_activation(name: str):
 
 
 class Layer(ABC):
-    @abstractmethod
-    def forward(self, x: np.ndarray, training: bool = True) -> np.ndarray: ...
+    autograd: bool = False
 
     @abstractmethod
-    def backward(self, grad: np.ndarray, pre_activation: bool = False) -> np.ndarray: ...
+    def forward(self, x, training: bool = True): ...
+
+    @abstractmethod
+    def backward(self, grad, pre_activation: bool = False): ...
+
+    def zero_grad(self) -> None:
+        """Reset autograd gradients (override in subclass)."""
+        pass
 
     def get_weights(self) -> Dict[str, np.ndarray]:
         return {}
@@ -71,8 +77,10 @@ class Dense(Layer):
         self.init: str = init.lower()
         self.init_params: Dict[str, Any] = init_params or {}
 
-        self.W: Optional[np.ndarray] = None
-        self.b: Optional[np.ndarray] = None
+        self.autograd: bool = False
+
+        self.W = None
+        self.b = None
 
         self._input: Optional[np.ndarray] = None
         self._z: Optional[np.ndarray] = None
@@ -112,20 +120,33 @@ class Dense(Layer):
                 std = np.sqrt(1.0 / input_size)
             W = np.random.randn(input_size, self.units) * std
 
-        self.W = W
-        self.b = np.zeros((1, self.units))
+        if self.autograd:
+            from autograd import Tensor
+            self.W = Tensor(W, requires_grad=True)
+            self.b = Tensor(np.zeros((1, self.units)), requires_grad=True)
+        else:
+            self.W = W
+            self.b = np.zeros((1, self.units))
 
-    def forward(self, x: np.ndarray, training: bool = True) -> np.ndarray:
+    def forward(self, x, training: bool = True):
         if self.W is None:
             self.build(x.shape[1])
+
+        if self.autograd:
+            z = x @ self.W + self.b
+            act = self.activation_name
+            if act == "relu":    return z.relu()
+            if act == "sigmoid": return z.sigmoid()
+            if act == "tanh":    return z.tanh_act()
+            return z  # linear / softmax
 
         self._input = x
         self._z = x @ self.W + self.b
         return self.activation(self._z)
 
-    def backward(
-        self, grad: np.ndarray, pre_activation: bool = False
-    ) -> np.ndarray:
+    def backward(self, grad, pre_activation: bool = False):
+        if self.autograd:
+            return grad  # no-op — gradients computed by autograd engine
         if pre_activation:
             dz = grad
         else:
@@ -139,12 +160,21 @@ class Dense(Layer):
         dx = dz @ self.W.T
         return dx
 
+    def zero_grad(self) -> None:
+        if self.autograd and self.W is not None:
+            self.W.zero_grad()
+            self.b.zero_grad()
+
     def get_params(self) -> Dict[str, np.ndarray]:
         if self.W is None:
             return {}
+        if self.autograd:
+            return {"W": self.W.data, "b": self.b.data}
         return {"W": self.W, "b": self.b}
 
     def get_grads(self) -> Dict[str, np.ndarray]:
+        if self.autograd and self.W is not None:
+            return {"W": self.W.grad, "b": self.b.grad}
         if self._dW is None:
             return {}
         return {"W": self._dW, "b": self._db}
@@ -152,11 +182,18 @@ class Dense(Layer):
     def get_weights(self) -> Dict[str, np.ndarray]:
         if self.W is None:
             return {}
+        if self.autograd:
+            return {"W": self.W.data, "b": self.b.data}
         return {"W": self.W, "b": self.b}
 
     def set_weights(self, weights: Dict[str, np.ndarray]) -> None:
-        self.W = weights["W"]
-        self.b = weights["b"]
+        if self.autograd:
+            from autograd import Tensor
+            self.W = Tensor(weights["W"], requires_grad=True)
+            self.b = Tensor(weights["b"], requires_grad=True)
+        else:
+            self.W = weights["W"]
+            self.b = weights["b"]
 
     def get_config(self) -> Dict[str, Any]:
         return {
@@ -170,10 +207,15 @@ class Dense(Layer):
         }
 
     def __repr__(self) -> str:
-        built = f"W{self.W.shape}" if self.W is not None else "unbuilt"
+        if self.W is not None:
+            s = self.W.data.shape if self.autograd else self.W.shape
+            built = f"W{s}"
+        else:
+            built = "unbuilt"
+        mode = ", autograd" if self.autograd else ""
         return (
             f"Dense(units={self.units}, activation='{self.activation_name}', "
-            f"l1={self.l1}, l2={self.l2}, {built})"
+            f"l1={self.l1}, l2={self.l2}, {built}{mode})"
         )
 
 
@@ -181,28 +223,37 @@ class RMSNorm(Layer):
 
     def __init__(self, eps: float = 1e-8) -> None:
         self.eps: float = eps
-        self.gamma: Optional[np.ndarray] = None
+        self.autograd: bool = False
+        self.gamma = None
         self._input: Optional[np.ndarray] = None
         self._rms: Optional[np.ndarray] = None
         self._x_norm: Optional[np.ndarray] = None
         self._dgamma: Optional[np.ndarray] = None
 
     def build(self, features: int) -> None:
-        self.gamma = np.ones((features,))
+        if self.autograd:
+            from autograd import Tensor
+            self.gamma = Tensor(np.ones((features,)), requires_grad=True)
+        else:
+            self.gamma = np.ones((features,))
         self._dgamma = np.zeros((features,))
 
-    def forward(self, x: np.ndarray, training: bool = True) -> np.ndarray:
+    def forward(self, x, training: bool = True):
         if self.gamma is None:
-            self.build(x.shape[1])
+            self.build(x.shape[-1])
+
+        if self.autograd:
+            rms = ((x ** 2).mean(axis=-1, keepdims=True) + self.eps) ** 0.5
+            return self.gamma * (x / rms)
 
         self._input = x
         self._rms = np.sqrt(np.mean(x ** 2, axis=1, keepdims=True) + self.eps)
         self._x_norm = x / self._rms
         return self.gamma * self._x_norm
 
-    def backward(
-        self, grad: np.ndarray, pre_activation: bool = False
-    ) -> np.ndarray:
+    def backward(self, grad, pre_activation: bool = False):
+        if self.autograd:
+            return grad  # no-op
         D = self._input.shape[1]
 
         self._dgamma = np.sum(grad * self._x_norm, axis=0)
@@ -213,12 +264,20 @@ class RMSNorm(Layer):
         dx = (u - self._x_norm * dot) / self._rms
         return dx
 
+    def zero_grad(self) -> None:
+        if self.autograd and self.gamma is not None:
+            self.gamma.zero_grad()
+
     def get_params(self) -> Dict[str, np.ndarray]:
         if self.gamma is None:
             return {}
+        if self.autograd:
+            return {"gamma": self.gamma.data}
         return {"gamma": self.gamma}
 
     def get_grads(self) -> Dict[str, np.ndarray]:
+        if self.autograd and self.gamma is not None:
+            return {"gamma": self.gamma.grad}
         if self._dgamma is None:
             return {}
         return {"gamma": self._dgamma}
@@ -226,10 +285,16 @@ class RMSNorm(Layer):
     def get_weights(self) -> Dict[str, np.ndarray]:
         if self.gamma is None:
             return {}
+        if self.autograd:
+            return {"gamma": self.gamma.data}
         return {"gamma": self.gamma}
 
     def set_weights(self, weights: Dict[str, np.ndarray]) -> None:
-        self.gamma = weights["gamma"]
+        if self.autograd:
+            from autograd import Tensor
+            self.gamma = Tensor(weights["gamma"], requires_grad=True)
+        else:
+            self.gamma = weights["gamma"]
 
     def get_config(self) -> Dict[str, Any]:
         return {"type": "RMSNorm", "eps": self.eps}
