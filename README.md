@@ -43,7 +43,7 @@ pip install -r requirements.txt
 
 ### 4. Siapkan dataset
 
-Download dataset `global_student_placement_and_salary.csv` dan letakkan di folder `data/`.
+Download dataset `datasetml_2026.csv` dan letakkan di folder `data/`.
 
 ### 5. Jalankan notebook
 
@@ -52,7 +52,7 @@ cd src
 jupyter notebook
 ```
 
-Buka `FFNN.ipynb` untuk melihat implementasi, atau `experiment.ipynb` untuk pengujian dan analisis hyperparameter.
+Buka `FFNN.ipynb` untuk melihat implementasi.
 
 ---
 
@@ -72,9 +72,9 @@ Buka `FFNN.ipynb` untuk melihat implementasi, atau `experiment.ipynb` untuk peng
 
 | Nama | NIM | Tugas |
 |------|-----|-------|
-| ... | ... | ... |
-| ... | ... | ... |
-| ... | ... | ... |
+| Bryan Ho | 13523029 | Membuat model.py, Membantu membuat bonus fungsi activation, Membuat bonus metode inisialisasi bobot, Membantu membuat laporan, Membantu membuat main.ipynb. |
+| Alvin Christopher Santausa | 13523033 | Membuat activation.py, Membuat bonus autograd.py, Membantu membuat laporan, Membuat main.ipynb. |
+| Kenneth Poenadi | 13523040 | Membuat layer.py sebagai base model untuk dipakai pada model.py, Membantu membuat loss.py, Membuat RMSNorm, Membuat Optimizer Adam, Membantu membuat laporan. |
 
 ---
 
@@ -256,11 +256,3 @@ Namun terdapat perbedaan implementasi kritis: `sklearn.MLPClassifier` dengan `so
 FFNN custom mengungguli sklearn MLP sebesar **+5.00%** meskipun hyperparameter identik. Penyebab utama: sklearn mengeluarkan `ConvergenceWarning` artinya bobot belum mencapai konvergensi dalam 50 iterasi — berbeda dengan implementasi custom yang menghitung 50 epoch penuh per batch secara konsisten. Dengan `max_iter` yang lebih besar (misal 200), gap ini kemungkinan akan menyempit karena keduanya konvergen ke solusi yang serupa.
 
 ---
-
-## Referensi
-
-- [The spelled-out intro to neural networks and backpropagation: building micrograd](https://youtu.be/VMj-3S1tku0)
-- [Forward Propagation](https://www.jasonosajima.com/forwardprop)
-- [Backpropagation](https://www.jasonosajima.com/backprop)
-- [NumPy Documentation](https://numpy.org/doc/2.2/)
-- [scikit-learn MLPClassifier](https://scikit-learn.org/stable/modules/generated/sklearn.neural_network.MLPClassifier.html)
