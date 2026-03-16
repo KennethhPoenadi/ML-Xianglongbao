@@ -1,7 +1,7 @@
 # Tugas Besar 1 IF3270 Pembelajaran Mesin
 ## Feedforward Neural Network (FFNN) from Scratch
 
-Implementasi Feedforward Neural Network (FFNN) dari nol menggunakan Python dan NumPy, untuk memenuhi spesifikasi Tugas Besar 1 IF3270 Pembelajaran Mesin 2025/2026.
+Implementasi Feedforward Neural Network (FFNN) dari nol menggunakan Python dan NumPy.
 
 ---
 
