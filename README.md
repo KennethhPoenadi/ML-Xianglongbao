@@ -205,7 +205,7 @@ Inisialisasi **zeros** melanggar *symmetry breaking*: semua neuron menghasilkan 
 **Dasar Teori:** Regularisasi menambahkan penalti pada fungsi loss untuk membatasi magnitude bobot:
 
 **L1 (Lasso):**
-$$\mathcal{L}_{\text{reg}} = \mathcal{L} + \lambda \sum_{i} |w_i|, \qquad \frac{\partial \mathcal{L}_{\text{reg}}}{\partial w_i} = \frac{\partial \mathcal{L}}{\partial w_i} + \lambda \cdot \text{sign}(w_i)$$
+$$\ _{\text{reg}} = \mathcal{L} + \lambda \sum_{i} |w_i|, \qquad \frac{\partial \mathcal{L}_{\text{reg}}}{\partial w_i} = \frac{\partial \mathcal{L}}{\partial w_i} + \lambda \cdot \text{sign}(w_i)$$
 
 **L2 (Ridge / Weight Decay):**
 $$\mathcal{L}_{\text{reg}} = \mathcal{L} + \frac{\lambda}{2} \sum_{i} w_i^2, \qquad \frac{\partial \mathcal{L}_{\text{reg}}}{\partial w_i} = \frac{\partial \mathcal{L}}{\partial w_i} + \lambda w_i$$
@@ -218,7 +218,7 @@ Ketiga konfigurasi menghasilkan akurasi yang sangat mirip karena $\lambda = 0.00
 
 ### 6. Pengaruh Normalisasi RMSNorm
 
-**Setup:** Arsitektur 64→[RMSNorm]→32→[RMSNorm]→1, SGD lr=0.01, epochs=100, batch=32
+T**Setup:** Arsitektur 64→[RMSNorm]→32→[RMSNorm]→1, SGD lr=0.01, epochs=100, batch=32
 
 | Model | Test Accuracy | Best Epoch | Min Val Loss | Final Val Loss |
 |---|:---:|:---:|:---:|:---:|
